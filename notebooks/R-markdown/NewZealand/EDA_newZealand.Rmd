@@ -120,7 +120,7 @@ ggplot(df_cat[df_cat$MAG>4,], aes(x=dateTime, y=MAG)) +
 
 ```
 
-## Frequency-magnitude analysis
+## Frequency-magnitude analysis for whole New Zealand
 
 ```{r National GR Plot}
 minMag <- 1
@@ -176,7 +176,8 @@ ggplot() +
   geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
   xlab("Magnitude threshold") +
   ylab("Aki b-value estimate") +
-  geom_hline(yintercept = 1, lty=3)
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for New Zealand")
 
 ```
 
@@ -217,7 +218,7 @@ ggplot() +
   ggtitle("Map of event locations")
 ```
 
-## Latitude-time plot
+## Latitude-time plot for whole New Zealand
 
 ```{r Latitude-time plot}
 ggplot() + 
@@ -226,6 +227,233 @@ ggplot() +
   geom_point(data=df_cat[df_cat$MAG>7,], aes(dateTime, LATITUDE), size=1.5, color='red') +
   ggtitle("New Zealand latitude-time plot")
 ```
+
+
+# Extract the South Island
+
+```{r subset the South Island}
+#eventDate <- ymd_hms( '2009-07-15 09:22:29' )
+
+latLims <- c( -42, -47)
+minMAG <- 4
+
+# Subset the main catalogue
+df_cat.south <- df_cat[df_cat$MAG >= minMAG, ]
+df_cat.south <- df_cat.south[ (df_cat.south$LATITUDE<latLims[1]), ]
+df_cat.south <- df_cat.south[ (df_cat.south$LATITUDE>latLims[2]), ]
+#df_cat.subset <- df_cat.subset[ (df_cat.subset$LONGITUDE>longLims[1]), ]
+#df_cat.subset <- df_cat.subset[ (df_cat.subset$LONGITUDE<longLims[2]), ]
+
+endDate <- max(df_cat.south$dateTime)
+startDate <- min(df_cat.south$dateTime)
+longLims <- c( min(df_cat.south$LONGITUDE), max(df_cat.south$LONGITUDE) )
+
+head(df_cat.south)
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = df_cat.sf[df_cat$MAG>4,], size = 0.05) +
+  geom_sf(data = nz_cropped, fill=alpha("lightgrey", 0), color = 'green') +
+  geom_sf(data = df_cat.sf[df_cat$MAG>6,], size = 0.5, color='orange') +
+  geom_sf(data = df_cat.sf[df_cat$MAG>7,], size = 0.5, color='red') +
+  ggtitle("Map of event locations")+
+  geom_rect(aes(xmin=longLims[1], xmax=longLims[2], ymin=latLims[1], ymax=latLims[2]), color="blue",fill=NA)
+```
+
+```{r}
+ggplot() + 
+  geom_point(data=df_cat[df_cat$MAG>4,], aes(dateTime, LATITUDE), size=0.1) +
+  geom_point(data=df_cat[df_cat$MAG>6,], aes(dateTime, LATITUDE), size=1.2, color='orange') +
+  geom_point(data=df_cat[df_cat$MAG>7,], aes(dateTime, LATITUDE), size=1.5, color='red') +
+  ggtitle("New Zealand latitude-time plot with Southern Island highlighted") +
+  geom_rect(aes(xmin = as.POSIXct(ymd("2001-1-1")), xmax = as.POSIXct(ymd("2012-1-1")), ymin = latLims[1], ymax = latLims[2]), alpha = 0.4, fill='blue')
+  
+```
+
+```{r}
+ggplot(df_cat.south, aes(x=dateTime, y=MAG)) + 
+  geom_point(size = 0.1) +
+  ggtitle("Southern Island magnitude timeseries for M>4") +
+  geom_rect( aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = minMAG, ymax = max(df_cat.south$MAG+0.2)), alpha = 0.4, fill=NA, color="blue" )
+
+```
+
+```{r Southern Island GR Plot}
+minMag <- 4
+maxMag <- max(df_cat.south$MAG)
+
+mags <- df_cat.south[df_cat.south$MAG>=minMag,]$MAG
+
+tmp <- hist(mags, breaks=seq(minMag-0.05,maxMag+0.1,0.1), plot=FALSE)
+
+N.counts <- length( tmp$counts)
+tmp$cumulativeCounts <- cumsum(tmp$counts[N.counts:1])[N.counts:1]
+
+m.min <- 4
+bin_m.min <- which(tmp$mids==m.min)
+freq_m.min <- tmp$counts[bin_m.min]
+b <- 1.1
+x <- tmp$mids
+y <- freq_m.min * 10^(-b*(x-m.min))
+y.cum <- tmp$cumulativeCounts[bin_m.min] * 10^(-b*(x-m.min))
+
+ggplot() +
+  geom_point( aes(x=tmp$mids, y=tmp$counts) ) +
+  geom_point( aes(x=tmp$mids, y=tmp$cumulativeCounts) , color='red', pch="+") +
+  scale_y_log10() +
+  ggtitle(paste("Frequency-magnitude plot with arbitary GR dist: b =", b)) +
+  xlab("Magnitude") +
+  ylab("log10(Frequency)") +
+  geom_line(aes(x=x, y=y)) +
+  geom_line(aes(x=x, y=y.cum), color='red') +
+  geom_vline( xintercept=m.min, lty=2 )
+
+```
+
+```{r Southern Island b-value stability}
+b.stability.list <- c()
+b.error.list <- c()
+m.mean <- c()
+
+max.index.x <- length(x)-5
+
+for( i in 1:max.index.x ){
+  mag.threshold <- x[i]
+  m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
+  b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
+}
+
+ggplot() +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list) ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list+b.error.list), color=2, lty=2 ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
+  xlab("Magnitude threshold") +
+  ylab("Aki b-value estimate") +
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for Southern Island")
+
+```
+
+# Extract the Northern Island
+
+```{r subset the Northern Island}
+#eventDate <- ymd_hms( '2009-07-15 09:22:29' )
+
+latLims <- c( -34, -41)
+minMAG <- 4
+
+# Subset the main catalogue
+df_cat.north <- df_cat[df_cat$MAG >= minMAG, ]
+df_cat.north <- df_cat.north[ (df_cat.north$LATITUDE>latLims[2]), ]
+#df_cat.north <- df_cat.north[ (df_cat.north$LATITUDE<latLims[2]), ]
+#df_cat.subset <- df_cat.subset[ (df_cat.subset$LONGITUDE>longLims[1]), ]
+#df_cat.subset <- df_cat.subset[ (df_cat.subset$LONGITUDE<longLims[2]), ]
+
+endDate <- max(df_cat.north$dateTime)
+startDate <- min(df_cat.north$dateTime)
+longLims <- c( min(df_cat.north$LONGITUDE), max(df_cat.north$LONGITUDE) )
+
+head(df_cat.north)
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = df_cat.sf[df_cat$MAG>4,], size = 0.05) +
+  geom_sf(data = nz_cropped, fill=alpha("lightgrey", 0), color = 'green') +
+  geom_sf(data = df_cat.sf[df_cat$MAG>6,], size = 0.5, color='orange') +
+  geom_sf(data = df_cat.sf[df_cat$MAG>7,], size = 0.5, color='red') +
+  ggtitle("Map of event locations")+
+  geom_rect(aes(xmin=longLims[1], xmax=longLims[2], ymin=latLims[1], ymax=latLims[2]), color="blue",fill=NA)
+```
+
+```{r}
+ggplot() + 
+  geom_point(data=df_cat[df_cat$MAG>4,], aes(dateTime, LATITUDE), size=0.1) +
+  geom_point(data=df_cat[df_cat$MAG>6,], aes(dateTime, LATITUDE), size=1.2, color='orange') +
+  geom_point(data=df_cat[df_cat$MAG>7,], aes(dateTime, LATITUDE), size=1.5, color='red') +
+  ggtitle("New Zealand latitude-time plot with Northern Island highlighted") +
+  geom_rect(aes(xmin = as.POSIXct(ymd("2001-1-1")), xmax = as.POSIXct(ymd("2012-1-1")), ymin = latLims[1], ymax = latLims[2]), alpha = 0.4, fill='blue')
+  
+```
+
+```{r}
+ggplot() + 
+  geom_point(data=df_cat.north[df_cat.north$MAG>4,], aes(dateTime, LATITUDE), size=0.1) +
+  geom_point(data=df_cat.north[df_cat.north$MAG>6,], aes(dateTime, LATITUDE), size=1.2, color='orange') +
+  geom_point(data=df_cat.north[df_cat.north$MAG>7,], aes(dateTime, LATITUDE), size=1.5, color='red') +
+  ggtitle("New Zealand latitude-time plot with Northern Island highlighted") +
+  geom_rect(aes(xmin = as.POSIXct(ymd("2001-1-1")), xmax = as.POSIXct(ymd("2012-1-1")), ymin = latLims[1], ymax = latLims[2]), alpha = 0.4, fill='blue')
+  
+```
+
+
+```{r}
+ggplot(df_cat.north, aes(x=dateTime, y=MAG)) + 
+  geom_point(size = 0.1) +
+  ggtitle("Northern Island magnitude timeseries for M>4") +
+  geom_rect( aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = minMAG, ymax = max(df_cat.north$MAG+0.2)), alpha = 0.4, fill=NA, color="blue" )
+
+```
+
+```{r Northern Island GR Plot}
+minMag <- 4
+maxMag <- max(df_cat.north$MAG)
+
+mags <- df_cat.north[df_cat.north$MAG>=minMag,]$MAG
+
+tmp <- hist(mags, breaks=seq(minMag-0.05,maxMag+0.1,0.1), plot=FALSE)
+
+N.counts <- length( tmp$counts)
+tmp$cumulativeCounts <- cumsum(tmp$counts[N.counts:1])[N.counts:1]
+
+m.min <- 4
+bin_m.min <- which(tmp$mids==m.min)
+freq_m.min <- tmp$counts[bin_m.min]
+b <- 1.1
+x <- tmp$mids
+y <- freq_m.min * 10^(-b*(x-m.min))
+y.cum <- tmp$cumulativeCounts[bin_m.min] * 10^(-b*(x-m.min))
+
+ggplot() +
+  geom_point( aes(x=tmp$mids, y=tmp$counts) ) +
+  geom_point( aes(x=tmp$mids, y=tmp$cumulativeCounts) , color='red', pch="+") +
+  scale_y_log10() +
+  ggtitle(paste("Frequency-magnitude plot with arbitary GR dist: b =", b)) +
+  xlab("Magnitude") +
+  ylab("log10(Frequency)") +
+  geom_line(aes(x=x, y=y)) +
+  geom_line(aes(x=x, y=y.cum), color='red') +
+  geom_vline( xintercept=m.min, lty=2 )
+
+```
+
+```{r Northern Island b-value stability}
+b.stability.list <- c()
+b.error.list <- c()
+m.mean <- c()
+
+max.index.x <- length(x)-5
+
+for( i in 1:max.index.x ){
+  mag.threshold <- x[i]
+  m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
+  b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
+}
+
+ggplot() +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list) ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list+b.error.list), color=2, lty=2 ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
+  xlab("Magnitude threshold") +
+  ylab("Aki b-value estimate") +
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for Northern Island")
+
+```
+
 
 # Extract the 2009 Fiordland Sequence
 
@@ -353,7 +581,8 @@ ggplot() +
   geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
   xlab("Magnitude threshold") +
   ylab("Aki b-value estimate") +
-  geom_hline(yintercept = 1, lty=3)
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for catalogue subset")
 
 ```
 

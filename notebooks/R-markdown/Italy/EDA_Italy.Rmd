@@ -1,0 +1,453 @@
+---
+title: "EDA_Italy"
+author: "Naylor"
+date: "2022-10-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#source('hawkes_functions.R')
+library(rnaturalearth)
+library(lubridate)
+library(raster)
+library(sf)
+library(sp)
+library(ggplot2)
+#library(nzsf)
+library(ggspatial)
+library(rnaturalearthdata)
+
+## This is just the EPSG equivalent of WGS84
+crs_wgs84 <- CRS(SRS_string='EPSG:4326')
+
+dataPath <- "../../../data/Italy/"
+```
+
+# Get map and extract crs for the map
+
+```{r}
+italy.map <- ne_countries(country = 'Italy', returnclass = "sf", scale = 'medium')
+italy.crs <- crs(italy.map)
+
+ggplot() + geom_sf(data = italy.map) + theme_bw()
+
+# Get the coastline from the rnaturalearth package for comparison
+#italy <- ne_countries(scale = "medium", returnclass = "sf", country = "New Zealand") %>%
+#  st_transform(crs = proj_nzsf()) %>%
+#  st_crop(get_statistical_areas(area = "EEZ"))
+```
+
+# Load and pre-process catalogue
+
+Let's look at the raw catalogue
+
+```{bash Print head of flat file}
+head ../../../data/Italy/earlyMedM3.txt
+```
+Preformat the catalogues...
+
+```{r}
+
+```
+
+Now we can load the catalogue in R and parse the date-times
+
+```{r}
+# Load the reformatted catalogue
+df_cat <- read.table("../../../data/Italy/earlyMedM3.txt", header=TRUE, sep="|", col.names=c("EventID","DateTime","Latitude","Longitude","DEPTH","Author","Catalog","Contributor","ContributorID","MagType","Magnitude","MagAuthor","EventLocationName","EventType"), fill=TRUE)
+
+df_cat_tmp <- read.table("../../../data/Italy/medLateM3.txt", header=TRUE, sep="|", col.names=c("EventID","DateTime","Latitude","Longitude","DEPTH","Author","Catalog","Contributor","ContributorID","MagType","Magnitude","MagAuthor","EventLocationName","EventType"), fill=TRUE)
+
+df_cat <- rbind(df_cat, df_cat_tmp)
+
+remove(df_cat_tmp)
+
+# add event number
+df_cat$event_num <- seq.int(nrow(df_cat))
+
+# parse date-times and set appropriate digital second resoluton
+op <- options(digits.secs=7)
+options(op)
+#df_cat$date <- ymd( paste(df_cat$YR, df_cat$MO, df_cat$DY, sep="-") )
+df_cat$dateTime <- ymd_hms( df_cat$DateTime )
+
+# sp version of the catalogue
+df_cat.sp <- data.frame(df_cat)
+sp::coordinates(df_cat.sp) <- c("Longitude", "Latitude")
+crs_wgs84 <- CRS(SRS_string='EPSG:4326')
+proj4string(df_cat.sp) <- crs_wgs84
+
+# sf version of the catalogue
+df_cat.sf<- st_as_sf(df_cat.sp)
+
+```
+```{r}
+head(df_cat)
+```
+
+# EDA for the whole Mediteranian catalogue
+
+## Histogram of event depths
+
+```{r}
+ggplot(df_cat, aes( x="DEPTH" )) + 
+  geom_histogram( binwidth=1 ) 
+```
+
+
+```{r Depth histogram}
+ggplot(df_cat, aes( x="DEPTH" )) + 
+  geom_histogram( binwidth=1 ) + 
+  coord_flip (xlim = c(350, 0) ) +
+  ggtitle("Hight res. histogram of event depths for depth inversion aretfacts")
+```
+## Plot of event magnitudes using natural time
+
+```{r}
+ggplot(df_cat, aes(x=event_num, y=Magnitude))  + geom_point(size = 0.1) 
+```
+
+## Plot of event magnitudes using date-time
+
+```{r Magnitude natural-time series}
+ggplot(df_cat, aes(x=dateTime, y=Magnitude)) + 
+  geom_point(size = 0.1) +
+  ggtitle("Whole Catalogue magnitude time series")
+```
+
+```{r Magnitude time series}
+# Filtered for M>4
+ggplot(df_cat[df_cat$Magnitude>4,], aes(x=dateTime, y=Magnitude)) + 
+  geom_point(size = 0.1) +
+  ggtitle("Whole catalogue magnitude timeseries for M>4")
+
+```
+
+## Frequency-magnitude analysis for whole Catalogue
+
+```{r National GR Plot}
+minMag <- 3
+maxMag <- max(df_cat$Magnitude)
+
+mags <- df_cat[df_cat$Magnitude>minMag,]$Magnitude
+
+tmp <- hist(mags, breaks=seq(minMag-0.05,maxMag+0.1,0.1), plot=FALSE)
+
+N.counts <- length( tmp$counts)
+tmp$cumulativeCounts <- cumsum(tmp$counts[N.counts:1])[N.counts:1]
+
+m.min <- 4
+bin_m.min <- which(tmp$mids==m.min)
+freq_m.min <- tmp$counts[bin_m.min]
+b <- 1.1
+x <- tmp$mids
+y <- freq_m.min * 10^(-b*(x-m.min))
+y.cum <- tmp$cumulativeCounts[bin_m.min] * 10^(-b*(x-m.min))
+
+ggplot() +
+  geom_point( aes(x=tmp$mids, y=tmp$counts) ) +
+  geom_point( aes(x=tmp$mids, y=tmp$cumulativeCounts) , color='red', pch="+", size=2) +
+  scale_y_log10() +
+  ggtitle(paste("Frequency-magnitude plot with arbitary GR dist: b =", b)) +
+  xlab("Magnitude") +
+  ylab("log10(Frequency)") +
+  geom_line(aes(x=x, y=y)) +
+  geom_line(aes(x=x, y=y.cum), color='red') +
+  geom_vline( xintercept=m.min, lty=2 )
+
+```
+
+```{r National b-value stability}
+b.stability.list <- c()
+b.error.list <- c()
+m.mean <- c()
+
+max.index.x <- length(x)-5
+
+for( i in 1:max.index.x ){
+  mag.threshold <- x[i]
+  N.events <- length(mags[mags > mag.threshold])
+  m.mean <- mean( mags[mags > mag.threshold] )
+  m.sd <- sd(mags[mags > mag.threshold])
+  b.stability.list[i] <- log10( exp(1) ) / (m.mean - mag.threshold - 0.05)
+  b.error.list[i] <- 2.3 * b.stability.list[i]^2 * m.sd / (sqrt(N.events*(N.events-1)))
+}
+
+ggplot() +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list) ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list+b.error.list), color=2, lty=2 ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
+  xlab("Magnitude threshold") +
+  ylab("Aki b-value estimate") +
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for Whole Catalogue")
+
+```
+
+## Various maps of the events
+
+```{r hexbin event density}
+ggplot() +
+  geom_hex(data = df_cat[df_cat$Magnitude>3,], aes(x = Longitude, y = Latitude), bins = 50) +
+  scale_fill_continuous(type = "viridis") +
+  geom_sf(data = italy.map, fill=alpha("lightgrey", 0), color = 'orange', size=0.2) + 
+  ggtitle("Density plot for M>3 events") +
+  theme_bw()
+```
+
+
+```{r map of locations}
+ggplot() +
+  geom_sf(data = italy.map, fill=alpha("lightgrey", 0), color = 'green') 
+  ggtitle("Map of event locations")
+  
+```
+
+```{r map of locations}
+ggplot() +
+  geom_sf(data = df_cat.sf[df_cat$Magnitude>3,], size = 0.05) +
+  geom_sf(data = italy.map, fill=alpha("lightgrey", 0), color = 'green') +
+  geom_sf(data = df_cat.sf[df_cat$Magnitude>5,], size = 0.5, color='orange') +
+  geom_sf(data = df_cat.sf[df_cat$Magnitude>6,], size = 0.5, color='red') +
+  ggtitle("Map of event locations")
+  
+```
+# Extract l'Aquila subset 
+
+start.date = "2009-04-06 00:00:00 BST"
+end.date = "2010-01-01 00:00:00 BST"
+magnitude.completeness = 2.49
+min.longitude = 13.00
+max.longitude = 13.75
+min.latitude = 42.2
+max.latitude = 42.5 
+
+```{r Extract l'Aquila subset}
+eventDate <- ymd_hms( '2009-04-06 00:00:00 BST' )
+endDate <- eventDate + days(400)
+startDate <- eventDate - days(50)
+deltaLat <- 2.4
+latLims <- c( 42.2,42.5)
+longLims <- c( 13, 13.75)
+
+minMAG <- 3
+
+# Subset the main catalogue
+df_cat.subset <- df_cat[df_cat$Magnitude >= minMAG, ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Latitude>latLims[1]), ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Latitude<latLims[2]), ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Longitude>longLims[1]), ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Longitude<longLims[2]), ]
+
+head(df_cat.subset)
+```
+
+```{r}
+ggplot() + 
+  geom_point(data=df_cat[df_cat$Magnitude>3,], aes(dateTime, Latitude), size=0.1) +
+  geom_point(data=df_cat[df_cat$Magnitude>5,], aes(dateTime, Latitude), size=1.2, color='orange') +
+  geom_point(data=df_cat[df_cat$Magnitude>6,], aes(dateTime, Latitude), size=1.5, color='red') +
+  ggtitle("L'Aquila latitude-time plot") +
+  geom_rect(aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = latLims[1], ymax = latLims[2]), alpha = 0.4, fill='blue', color='blue')
+  
+```
+
+```{r}
+ggplot(df_cat.subset, aes(x=dateTime, y=Magnitude)) + 
+  geom_point(size = 0.1) +
+  ggtitle("New Zealand magnitude timeseries for M>4") +
+  geom_rect( aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = minMAG, ymax = max(df_cat.subset$Magnitude+0.2)), alpha = 0.4, fill=NA, color="blue" )
+
+```
+
+
+```{r regional GR Plot}
+minMag <- 3
+maxMag <- max(df_cat.subset$Magnitude, na.rm=TRUE)
+
+mags <- df_cat.subset[df_cat.subset$Magnitude>=minMag,]$Magnitude
+
+tmp <- hist(mags, breaks=seq(minMag-0.05,maxMag+0.4,0.1), plot=FALSE)
+
+N.counts <- length( tmp$counts)
+tmp$cumulativeCounts <- cumsum(tmp$counts[N.counts:1])[N.counts:1]
+
+m.min <- 4
+bin_m.min <- which(tmp$mids==m.min)
+freq_m.min <- tmp$counts[bin_m.min]
+b <- 1.1
+x <- tmp$mids
+y <- freq_m.min * 10^(-b*(x-m.min))
+y.cum <- tmp$cumulativeCounts[bin_m.min] * 10^(-b*(x-m.min))
+
+ggplot() +
+  geom_point( aes(x=tmp$mids, y=tmp$counts) ) +
+  geom_point( aes(x=tmp$mids, y=tmp$cumulativeCounts) , color='red', pch="+") +
+  scale_y_log10() +
+  ggtitle(paste("Frequency-magnitude plot with arbitary GR dist: b =", b)) +
+  xlab("Magnitude") +
+  ylab("log10(Frequency)") +
+  geom_line(aes(x=x, y=y)) +
+  geom_line(aes(x=x, y=y.cum), color='red') +
+  geom_vline( xintercept=m.min, lty=2 )
+
+```
+
+```{r}
+b.stability.list <- c()
+b.error.list <- c()
+m.mean <- c()
+
+max.index.x <- length(x)-5
+
+for( i in 1:max.index.x ){
+  mag.threshold <- x[i]
+  m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  N.events <- sum(mags > mag.threshold)
+  b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
+  b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
+}
+
+ggplot() +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list) ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list+b.error.list), color=2, lty=2 ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
+  xlab("Magnitude threshold") +
+  ylab("Aki b-value estimate") +
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for catalogue subset")
+
+```
+
+
+# Extract l'Amatrice subset 
+
+#######################
+## Sequence parameters #
+#######################
+
+start.date = "2016-08-24 01:36:00 BST"
+end.date = "2017-08-15 19:25:33 BST"
+magnitude.completeness = 2.99
+min.longitude = 12.9
+max.longitude = 13.5
+min.latitude = 42.4
+max.latitude = 43.08
+catalog.path = "data/ISIDE_M2.5.txt"
+catalog.header = TRUE
+catalog.sep = ' '
+catalog.skip = 0
+catalog.colnames = NULL
+
+
+```{r Extract Amatrice subset}
+eventDate <- ymd_hms( '2016-08-24 01:36:00 BST' )
+endDate <- eventDate + days(400)
+startDate <- eventDate - days(50)
+deltaLat <- 2.4
+latLims <- c( 42.4,43.08)
+longLims <- c( 12.9, 13.5)
+
+minMAG <- 3.
+
+# Subset the main catalogue
+df_cat.subset <- df_cat[df_cat$Magnitude >= minMAG, ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Latitude>latLims[1]), ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Latitude<latLims[2]), ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Longitude>longLims[1]), ]
+df_cat.subset <- df_cat.subset[ (df_cat.subset$Longitude<longLims[2]), ]
+
+head(df_cat.subset)
+```
+
+```{r Amatrice latitude-time plot}
+ggplot() + 
+  geom_point(data=df_cat[df_cat$Magnitude>3,], aes(dateTime, Latitude), size=0.1) +
+  geom_point(data=df_cat[df_cat$Magnitude>5,], aes(dateTime, Latitude), size=1.2, color='orange') +
+  geom_point(data=df_cat[df_cat$Magnitude>6,], aes(dateTime, Latitude), size=1.5, color='red') +
+  ggtitle("Amatrice latitude-time plot") +
+  geom_rect(aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = latLims[1], ymax = latLims[2]), alpha = 0.4, fill='blue', color='blue')
+  
+```
+
+```{r}
+
+ggplot() + 
+  geom_point(data=df_cat[df_cat$Magnitude>3,], aes(dateTime, Latitude), size=0.1) +
+  geom_point(data=df_cat[df_cat$Magnitude>5,], aes(dateTime, Latitude), size=1.2, color='orange') +
+  geom_point(data=df_cat[df_cat$Magnitude>6,], aes(dateTime, Latitude), size=1.5, color='red') +
+  ggtitle("New Zealand latitude-time plot") +
+  geom_rect(aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = latLims[1], ymax = latLims[2]), alpha = 0.4, fill='blue', color='blue') +
+  ylim(latLims)
+  
+```
+
+```{r}
+ggplot(df_cat.subset, aes(x=dateTime, y=Magnitude)) + 
+  geom_point(size = 0.1) +
+  ggtitle("New Zealand magnitude timeseries for M>4") +
+  geom_rect( aes(xmin = as.POSIXct(startDate), xmax = as.POSIXct(endDate), ymin = minMAG, ymax = max(df_cat.subset$Magnitude+0.2)), alpha = 0.4, fill=NA, color="blue" )
+
+```
+
+
+```{r regional GR Plot}
+minMag <- 3
+maxMag <- max(df_cat.subset$Magnitude, na.rm=TRUE)
+
+mags <- df_cat.subset[df_cat.subset$Magnitude>=minMag,]$Magnitude
+
+tmp <- hist(mags, breaks=seq(minMag-0.05,maxMag+0.4,0.1), plot=FALSE)
+
+N.counts <- length( tmp$counts)
+tmp$cumulativeCounts <- cumsum(tmp$counts[N.counts:1])[N.counts:1]
+
+m.min <- 4
+bin_m.min <- which(tmp$mids==m.min)
+freq_m.min <- tmp$counts[bin_m.min]
+b <- 1.1
+x <- tmp$mids
+y <- freq_m.min * 10^(-b*(x-m.min))
+y.cum <- tmp$cumulativeCounts[bin_m.min] * 10^(-b*(x-m.min))
+
+ggplot() +
+  geom_point( aes(x=tmp$mids, y=tmp$counts) ) +
+  geom_point( aes(x=tmp$mids, y=tmp$cumulativeCounts) , color='red', pch="+") +
+  scale_y_log10() +
+  ggtitle(paste("Frequency-magnitude plot with arbitary GR dist: b =", b)) +
+  xlab("Magnitude") +
+  ylab("log10(Frequency)") +
+  geom_line(aes(x=x, y=y)) +
+  geom_line(aes(x=x, y=y.cum), color='red') +
+  geom_vline( xintercept=m.min, lty=2 )
+
+```
+
+```{r}
+b.stability.list <- c()
+b.error.list <- c()
+m.mean <- c()
+
+max.index.x <- length(x)-5
+
+for( i in 1:max.index.x ){
+  mag.threshold <- x[i]
+  m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  N.events <- sum(mags > mag.threshold)
+  b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
+  b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
+}
+
+ggplot() +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list) ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list+b.error.list), color=2, lty=2 ) +
+  geom_line( aes(x=x[1:max.index.x], y=b.stability.list-b.error.list), color=2, lty=2 ) +
+  xlab("Magnitude threshold") +
+  ylab("Aki b-value estimate") +
+  geom_hline(yintercept = 1, lty=3) +
+  ggtitle("b-value stability plot for catalogue subset")
+
+```
+

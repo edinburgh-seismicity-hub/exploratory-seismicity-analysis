@@ -17,6 +17,7 @@ library(lubridate)
 library(raster)
 library(sf)
 library(sp)
+library(ggplot2)
 
 library(nzsf)
 library(ggspatial)
@@ -321,6 +322,7 @@ max.index.x <- length(x)-5
 for( i in 1:max.index.x ){
   mag.threshold <- x[i]
   m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  N.events <- sum(mags > mag.threshold)
   b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
   b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
 }
@@ -439,6 +441,7 @@ max.index.x <- length(x)-5
 for( i in 1:max.index.x ){
   mag.threshold <- x[i]
   m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  sum(mags > mag.threshold)
   b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
   b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
 }
@@ -571,6 +574,7 @@ max.index.x <- length(x)-5
 for( i in 1:max.index.x ){
   mag.threshold <- x[i]
   m.mean[i] <- mean( mags[mags > mag.threshold], na.rm=TRUE )
+  N.events <- sum(mags > mag.threshold)
   b.stability.list[i] <- log10( exp(1) ) / (m.mean[i] - mag.threshold - 0.05)
   b.error.list[i] <- 2.3 * b.stability.list[i]^2 * sd(mags[mags > mag.threshold]) / (sqrt(N.events*(N.events-1)))
 }
